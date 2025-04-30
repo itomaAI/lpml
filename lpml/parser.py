@@ -101,3 +101,63 @@ def parse(text: str, exclude: Optional[List[str]] = None) -> LPMLTree:
         print(f'Warning: Unclosed elements remain: {tags_remain}')
 
     return tree
+
+
+def _repr_tag(tag, content, **kwargs):
+    if kwargs:
+        attr = ' ' + ' '.join([f'{k}="{v}"' for k, v in kwargs.items()])
+    else:
+        attr = ''
+    bra = f'<{tag}{attr}>'
+    ket = f'</{tag}>'
+    emp = f'<{tag}/>'
+    if content is None:
+        return emp
+    return ''.join([bra, content, ket])
+
+
+def deparse(tree: LPMLTree) -> str:
+    """Deparse LPML tree.
+
+    Args:
+        tree (LPMLTree): The tree to deparse.
+
+    Returns:
+        str: The deparsed text.
+    """
+    if tree is None:
+        return tree
+
+    text = ''
+
+    for element in tree:
+        if isinstance(element, str):
+            text += element
+            continue
+        element['content'] = deparse(element['content'])
+        text += _repr_tag(
+            element['tag'], element['content'], **element['attributes'])
+    return text
+
+
+def findall(tree: LPMLTree, tag: str) -> List[Element]:
+    """Find all elements with the specified tag."
+
+    Args:
+        tree (LPMLTree): The tree to search.
+        tag (str): The tag to search for.
+
+    Returns:
+        List[Element]: The list of elements with the specified tag.
+    """
+    if tree is None:
+        return []
+
+    result = []
+    for element in tree:
+        if not isinstance(element, dict):
+            continue
+        if element['tag'] == tag:
+            result.append(element)
+        result += findall(element['content'], tag)
+    return result
