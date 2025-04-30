@@ -141,7 +141,7 @@ def deparse(tree: LPMLTree) -> str:
 
 
 def findall(tree: LPMLTree, tag: str) -> List[Element]:
-    """Find all elements with the specified tag."
+    """Find all elements with the specified tag.
 
     Args:
         tree (LPMLTree): The tree to search.
