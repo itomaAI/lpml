@@ -7,8 +7,19 @@ Element = Dict[str, Union[str, Attributes, List['Element']]]
 LPMLTree = List[Union[str, Element]]
 
 
-PATTERN_ELEMENT = r'(<([^/>\s\n]+)([^/>\n]*)?>([\s\S]*)</\2>|<([^/>\s\n]+)([^/>\n]*)?/>)'
-PATTERN_ATTRIBUTES = r'(\S*?)="(.*?)"'
+PATTERN_ATTRIBUTE = r''' ([^"'/<> -]+)=(?:"([^"]*)"|'([^']*)')'''
+PATTERN_ATTRIBUTE_NO_CAPTURE = r''' [^"'/<> -]+=(?:"[^"]*"|'[^']*')'''
+PATTERN_TAG_START = rf'<([^/>\s\n]+)((?:{PATTERN_ATTRIBUTE_NO_CAPTURE})*)\s*>'
+PATTERN_TAG_END = r'</([^/>\s\n]+)\s*>'
+PATTERN_TAG_EMPTY = rf'<([^/>\s\n]+)((?:{PATTERN_ATTRIBUTE_NO_CAPTURE})*)\s*/>'
+PATTERN_TAG = rf'({PATTERN_TAG_START}|{PATTERN_TAG_END}|{PATTERN_TAG_EMPTY})'
+
+
+def _parse_attributes(text: str) -> Attributes:
+    attributes: Attributes = {}
+    for k, v1, v2 in re.findall(PATTERN_ATTRIBUTE, text):
+        attributes[k] = v1 or v2
+    return attributes
 
 
 def parse(text: str, exclude: Optional[List[str]] = None) -> LPMLTree:
@@ -24,121 +35,69 @@ def parse(text: str, exclude: Optional[List[str]] = None) -> LPMLTree:
     if exclude is None:
         exclude = []
 
-    matcher_attributes = re.compile(PATTERN_ATTRIBUTES)
-    matcher_element = re.compile(PATTERN_ELEMENT)
+    tree: LPMLTree = []
 
-    def _extract_attributes(text):
-        attributes = {k: v for k, v in matcher_attributes.findall(text)}
-        return attributes
+    cursor = 0
+    tag_exclude = None
+    stack = [{'tag': 'root', 'content': tree}]
 
-    def _extract_element(text):
-        if text is None:
-            return None, None, None
+    for match in re.finditer(PATTERN_TAG, text):
+        tag = match.group(0)
+        match_tag_start = re.fullmatch(PATTERN_TAG_START, tag)
+        match_tag_end = re.fullmatch(PATTERN_TAG_END, tag)
+        match_tag_empty = re.fullmatch(PATTERN_TAG_EMPTY, tag)
 
-        text_split = matcher_element.split(text, maxsplit=1)
+        if tag_exclude is not None:
+            if match_tag_end and match_tag_end.group(1) == tag_exclude:
+                tag_exclude = None
+            else:
+                continue
 
-        # no more tags
-        if len(text_split) == 1:
-            return text_split[0], None, None
+        ind_tag_start, ind_tag_end = match.span()
+        content_str = text[cursor:ind_tag_start]
+        if content_str:
+            stack[-1]['content'].append(content_str)
+        cursor = ind_tag_end
 
-        left = text_split[0]
-        right = text_split[7]
+        if match_tag_start:
+            name = match_tag_start.group(1)
+            if name in exclude:
+                tag_exclude = name
 
-        if text_split[5] is not None:
-            tag = text_split[5]
-            attributes = _extract_attributes(text_split[6])
-            content = None
-        else:
-            tag = text_split[2]
-            attributes = _extract_attributes(text_split[3])
-            content = text_split[4]
+            attributes = _parse_attributes(match_tag_start.group(2))
+            element: Element = {
+                'tag': name,
+                'attributes': attributes,
+                'content': []
+            }
+            stack[-1]['content'].append(element)
+            stack.append(element)
 
-        element = {
-            'tag': tag,
-            'attributes': attributes,
-            'content': content
-        }
+        elif match_tag_empty:
+            name = match_tag_empty.group(1)
+            attributes = _parse_attributes(match_tag_empty.group(2))
+            element: Element = {
+                'tag': name,
+                'attributes': attributes,
+                'content': None
+            }
+            stack[-1]['content'].append(element)
 
-        return left, element, right
+        elif match_tag_end:
+            name = match_tag_end.group(1)
+            for i in range(len(stack)-1, 0, -1):
+                if stack[i]['tag'] == name:
+                    ind_tag_start = i
+                    break
+            else:
+                print(f'Warning: Unmatched closing tag </{name}> found.')
+                stack[-1]['content'].append(tag)
+            stack = stack[:max(1, ind_tag_start)]
 
-    def _extract_elements_recursive(text):
-        elements = []
+    stack[-1]['content'].append(text[cursor:])
 
-        while True:
-            left, element, text = _extract_element(text)
-            if left != '':
-                # <tag> のみを許可するか？
-                elements += [left]
+    if len(stack) > 1:
+        tags_remain = [e["tag"] for e in stack][1:]
+        print(f'Warning: Unclosed elements remain: {tags_remain}')
 
-            if element is None:
-                break
-
-            if not (element['tag'] in exclude or element['content'] is None):
-                content = element['content']
-                content = _extract_elements_recursive(content)
-                element['content'] = content
-
-            elements += [element]
-        return elements
-
-    return _extract_elements_recursive(text)
-
-
-def _repr_tag(tag, content, **kwargs):
-    if kwargs:
-        attr = ' ' + ' '.join([f'{k}="{v}"' for k, v in kwargs.items()])
-    else:
-        attr = ''
-    bra = f'<{tag}{attr}>'
-    ket = f'</{tag}>'
-    emp = f'<{tag}/>'
-    if content is None:
-        return emp
-    return ''.join([bra, content, ket])
-
-
-def deparse(tree: LPMLTree) -> str:
-    """Deparse LPML tree.
-
-    Args:
-        tree (LPMLTree): The tree to deparse.
-
-    Returns:
-        str: The deparsed text.
-    """
-    if tree is None:
-        return tree
-
-    text = ''
-
-    for element in tree:
-        if isinstance(element, str):
-            text += element
-            continue
-        element['content'] = deparse(element['content'])
-        text += _repr_tag(
-            element['tag'], element['content'], **element['attributes'])
-    return text
-
-
-def findall(tree: LPMLTree, tag: str) -> List[Element]:
-    """Find all elements with the specified tag."
-
-    Args:
-        tree (LPMLTree): The tree to search.
-        tag (str): The tag to search for.
-
-    Returns:
-        List[Element]: The list of elements with the specified tag.
-    """
-    if tree is None:
-        return []
-
-    result = []
-    for element in tree:
-        if not isinstance(element, dict):
-            continue
-        if element['tag'] == tag:
-            result.append(element)
-        result += findall(element['content'], tag)
-    return result
+    return tree
