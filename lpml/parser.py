@@ -22,7 +22,8 @@ def _parse_attributes(text: str) -> Attributes:
     return attributes
 
 
-def parse(text: str, exclude: Optional[List[str]] = None) -> LPMLTree:
+def parse(text: str, strip: bool = False, 
+          exclude: Optional[List[str]] = None) -> LPMLTree:
     """Parse LPML text.
 
     Args:
@@ -55,6 +56,8 @@ def parse(text: str, exclude: Optional[List[str]] = None) -> LPMLTree:
 
         ind_tag_start, ind_tag_end = match.span()
         content_str = text[cursor:ind_tag_start]
+        if strip:
+            content_str = content_str.strip()
         if content_str:
             stack[-1]['content'].append(content_str)
         cursor = ind_tag_end
@@ -94,7 +97,11 @@ def parse(text: str, exclude: Optional[List[str]] = None) -> LPMLTree:
                 stack[-1]['content'].append(tag)
             stack = stack[:max(1, ind_tag_start)]
 
-    stack[-1]['content'].append(text[cursor:])
+    content_str = text[cursor:]
+    if strip:
+        content_str = content_str.strip()
+    if content_str:
+        stack[-1]['content'].append(content_str)
 
     if len(stack) > 1:
         tags_remain = [e["tag"] for e in stack][1:]
