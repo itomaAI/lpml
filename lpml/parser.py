@@ -141,9 +141,9 @@ def deparse(tree: LPMLTree) -> str:
         if isinstance(element, str):
             text += element
             continue
-        element['content'] = deparse(element['content'])
+        deparsed_content = deparse(element['content'])
         text += _repr_tag(
-            element['tag'], element['content'], **element['attributes'])
+            element['tag'], deparsed_content, **element['attributes'])
     return text
 
 
