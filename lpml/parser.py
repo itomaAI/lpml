@@ -1,11 +1,10 @@
 import re
+import uuid
 from typing import List, Dict, Union, Optional
-
 
 Attributes = Dict[str, str]
 Element = Dict[str, Union[str, Attributes, List['Element']]]
 LPMLTree = List[Union[str, Element]]
-
 
 PATTERN_ATTRIBUTE = r''' ([^"'/<> -]+)=(?:"([^"]*)"|'([^']*)')'''
 PATTERN_ATTRIBUTE_NO_CAPTURE = r''' [^"'/<> -]+=(?:"[^"]*"|'[^']*')'''
@@ -14,12 +13,52 @@ PATTERN_TAG_END = r'</([^/>\s\n]+)\s*>'
 PATTERN_TAG_EMPTY = rf'<([^/>\s\n]+)((?:{PATTERN_ATTRIBUTE_NO_CAPTURE})*)\s*/>'
 PATTERN_TAG = rf'({PATTERN_TAG_START}|{PATTERN_TAG_END}|{PATTERN_TAG_EMPTY})'
 
+# Backticks OR XML comments/declarations (<!-- ... --> or <! ... >)
+# Using non-greedy matching (.*?) with DOTALL to catch content across lines
+PATTERN_PROTECT = r'(`.*?`|<!--.*?-->|<!.*?>)'
+
 
 def _parse_attributes(text: str) -> Attributes:
     attributes: Attributes = {}
     for k, v1, v2 in re.findall(PATTERN_ATTRIBUTE, text):
         attributes[k] = v1 or v2
     return attributes
+
+
+def _restore_string(text: str, protected: Dict[str, str]) -> str:
+    """Helper to restore protected content within a string."""
+    # Optimization: check if restoration is needed before looping
+    if "__PROTECTED_" not in text:
+        return text
+    
+    for placeholder, original in protected.items():
+        text = text.replace(placeholder, original)
+    return text
+
+
+def _restore_protected_content(
+        tree: LPMLTree, protected: Dict[str, str]) -> LPMLTree:
+    """Recursively traverse the tree and restore placeholders in content and attributes."""
+    restored_tree: LPMLTree = []
+    for item in tree:
+        if isinstance(item, str):
+            # Restore in text content
+            item = _restore_string(item, protected)
+            restored_tree.append(item)
+        elif isinstance(item, dict):
+            # Restore in attributes (FIXED: previously missing)
+            if 'attributes' in item:
+                new_attributes = {}
+                for k, v in item['attributes'].items():
+                    new_attributes[k] = _restore_string(v, protected)
+                item['attributes'] = new_attributes
+
+            # Recursively restore in nested content
+            if isinstance(item['content'], list):
+                item['content'] = _restore_protected_content(
+                    item['content'], protected)
+            restored_tree.append(item)
+    return restored_tree
 
 
 def parse(text: str, strip: bool = False, 
@@ -33,6 +72,20 @@ def parse(text: str, strip: bool = False,
     Returns:
         LPMLTree: The parsed tree.
     """
+    protected_content: Dict[str, str] = {}
+
+    # 1. Protect phase: Replace backticked content AND comments with unique placeholders
+    def protect_match(match):
+        # Generate a unique placeholder
+        placeholder = f"__PROTECTED_{uuid.uuid4().hex}__"
+        # Store the original content
+        protected_content[placeholder] = match.group(0)
+        return placeholder
+
+    # Apply protection for both backticks and <!-- --> / <! > blocks
+    text = re.sub(
+        PATTERN_PROTECT, protect_match, text, flags=re.DOTALL)
+
     if exclude is None:
         exclude = []
 
@@ -107,6 +160,7 @@ def parse(text: str, strip: bool = False,
         tags_remain = [e["tag"] for e in stack][1:]
         print(f'Warning: Unclosed elements remain: {tags_remain}')
 
+    tree = _restore_protected_content(tree, protected_content)
     return tree
 
 
@@ -168,3 +222,11 @@ def findall(tree: LPMLTree, tag: str) -> List[Element]:
             result.append(element)
         result += findall(element['content'], tag)
     return result
+
+
+def generate_element(tag: str, content: str, **attributes) -> Element:
+    return {
+        'tag': tag,
+        'attributes': attributes,
+        'content': content
+    }
